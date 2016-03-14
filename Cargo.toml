@@ -1,0 +1,9 @@
+[package]
+name = "trapdoor"
+version = "0.1.0"
+authors = ["Ian Quick <ian.quick@gmail.com>"]
+
+[dependencies]
+libc = "0.2"
+byteorder = "0.4"
+bit-vec = "0.4"
