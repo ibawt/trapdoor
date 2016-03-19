@@ -19,7 +19,16 @@ pub enum Error {
 pub type ASN1Result<T> = Result<T, Error>;
 pub type ObjectIdentifier = Box<[u32]>;
 
-type ASN1Reader<'a> = io::Cursor<&'a [u8]>;
+pub type ASN1Reader<'a> = io::Cursor<&'a [u8]>;
+
+pub fn oid_equals(a: &[u32], b: &[u32]) -> bool {
+    for (i,j) in a.iter().zip(b.iter()) {
+        if i != j {
+            return false
+        }
+    }
+    return true
+}
 
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
@@ -39,6 +48,14 @@ impl error::Error for Error {
             Error::ByteOrder(ref e) => e.description(),
             Error::Io(ref e) => e.description(),
             Error::UnexpectedValue => "unexpected value"
+        }
+    }
+
+    fn cause(&self) -> Option<&error::Error> {
+        match *self {
+            Error::ByteOrder(ref e) => Some(e),
+            Error::Io(ref e) => Some(e),
+            _ => None
         }
     }
 }
@@ -61,7 +78,7 @@ impl From<byteorder::Error> for Error {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone, Copy, PartialEq)]
 enum ASN1Type {
     EndOfContents = 0,
     Boolean = 0x1,
@@ -99,7 +116,7 @@ enum ASN1Type {
 }
 
 impl ASN1Type {
-    fn from(b: u8) -> Result<ASN1Type, Error> {
+    fn from(b: u8) -> ASN1Result<ASN1Type> {
         use self::ASN1Type::*;
 
         Ok(match b {
@@ -166,35 +183,35 @@ pub enum ASN1Value {
 
 
 impl ASN1Value {
-    pub fn as_oid(self) -> Result<ObjectIdentifier, Error> {
+    pub fn as_oid(self) -> ASN1Result<ObjectIdentifier> {
         match self {
             ASN1Value::ObjectIdentifier(a) => Ok(a),
             _ => Err(Error::WrongType)
         }
     }
 
-    pub fn as_ipaddr(self) -> Result<IpAddr, Error> {
+    pub fn as_ipaddr(self) -> ASN1Result<IpAddr> {
         match self {
             ASN1Value::IPAddress(addr) => Ok(addr),
             _ => Err(Error::WrongType)
         }
     }
 
-    pub fn as_bool(self) -> Result<bool, Error> {
+    pub fn as_bool(self) -> ASN1Result<bool> {
         match self {
             ASN1Value::Boolean(b) => Ok(b),
             _ => Err(Error::WrongType)
         }
     }
 
-    pub fn as_i64(self) -> Result<i64, Error> {
+    pub fn as_i64(self) -> ASN1Result<i64> {
         match self {
             ASN1Value::Integer(i) => Ok(i),
             _ => Err(Error::WrongType)
         }
     }
 
-    pub fn as_u32(self) -> Result<u32, Error> {
+    pub fn as_u32(self) -> ASN1Result<u32> {
         match self {
             ASN1Value::Integer(x) => Ok(x as u32),
             ASN1Value::TimeTicks(x) => Ok(x),
@@ -202,14 +219,14 @@ impl ASN1Value {
         }
     }
 
-    pub fn as_string(self) -> Result<String, Error> {
+    pub fn as_string(self) -> ASN1Result<String> {
         match self {
             ASN1Value::OctetString(s) => Ok(s),
             _ => Err(Error::WrongType)
         }
     }
 
-    pub fn as_sequence(self) -> Result<Sequence, Error> {
+    pub fn as_sequence(self) -> ASN1Result<Sequence> {
         match self {
             ASN1Value::Sequence(v) => Ok(v),
             ASN1Value::Trap(v) => Ok(v),
@@ -218,13 +235,13 @@ impl ASN1Value {
     }
 }
 
-fn read_tag_value(reader: &mut ASN1Reader) -> Result<(ASN1Type, usize), Error> {
+fn read_tag_value(reader: &mut ASN1Reader) -> ASN1Result<(ASN1Type, usize)> {
     let asn_type = try!(read_byte(reader).and_then(ASN1Type::from));
     let length = try!(read_length(reader));
     Ok((asn_type, length))
 }
 
-fn read_sequence(c: &mut io::Cursor<&[u8]>, len: usize) -> Result<Sequence, Error> {
+fn read_sequence(c: &mut ASN1Reader, len: usize) -> ASN1Result<Sequence> {
     let mut out = vec![];
     let start = c.position();
     while ((c.position() - start) as usize) < len {
@@ -234,7 +251,7 @@ fn read_sequence(c: &mut io::Cursor<&[u8]>, len: usize) -> Result<Sequence, Erro
     Ok(out.into_boxed_slice())
 }
 
-pub fn decode_value(c: &mut io::Cursor<&[u8]>) -> Result<ASN1Value, Error> {
+pub fn decode_value(c: &mut ASN1Reader) -> ASN1Result<ASN1Value> {
     use self::ASN1Type::*;
 
     let (asn_type, length) = try!(read_tag_value(c));
@@ -303,11 +320,11 @@ pub fn decode_value(c: &mut io::Cursor<&[u8]>) -> Result<ASN1Value, Error> {
 }
 
 #[inline]
-fn read_byte(reader: &mut ASN1Reader) -> Result<u8, Error> {
+fn read_byte(reader: &mut ASN1Reader) -> ASN1Result<u8> {
     reader.read_u8().map_err(Error::ByteOrder)
 }
 
-fn read_length(reader: &mut ASN1Reader) -> Result<usize, Error> {
+fn read_length(reader: &mut ASN1Reader) -> ASN1Result<usize> {
     let length = try!(read_byte(reader));
 
     if length < 127 {
@@ -323,7 +340,7 @@ fn read_length(reader: &mut ASN1Reader) -> Result<usize, Error> {
     }
 }
 
-fn read_integer(reader: &mut ASN1Reader, len: usize) -> Result<i64, Error> {
+fn read_integer(reader: &mut ASN1Reader, len: usize) -> ASN1Result<i64> {
     let mut v = 0;
 
     for _ in 0..len {
@@ -333,8 +350,7 @@ fn read_integer(reader: &mut ASN1Reader, len: usize) -> Result<i64, Error> {
     Ok(v)
 }
 
-fn read_base128int(reader: &mut ASN1Reader) -> Result<u32, Error> {
-    // TODO: review this code
+fn read_base128int(reader: &mut ASN1Reader) -> ASN1Result<u32> {
     let mut r = 0;
     loop {
         if r > 4 {
@@ -350,15 +366,15 @@ fn read_base128int(reader: &mut ASN1Reader) -> Result<u32, Error> {
     Ok(r)
 }
 
-fn read_oid(r: &mut ASN1Reader, len: usize) -> Result<ObjectIdentifier, Error> {
-    // TODO: review this code
+fn read_oid(r: &mut ASN1Reader, len: usize) -> ASN1Result<ObjectIdentifier> {
     let mut oid = Vec::new();
+
+    let start = r.position();
 
     let v = try!(read_byte(r));
     oid.push( (v/40) as u32);
     oid.push( (v % 40) as u32);
 
-    let start = r.position();
 
     while ((r.position() - start) as usize) < len {
         let val = try!(read_base128int(r));
