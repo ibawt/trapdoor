@@ -1,9 +1,55 @@
-use std::error::Error;
 use std::io;
 use std::net::IpAddr;
+use std::error;
+use std::fmt;
+
 use asn1;
 
-pub type SnmpError = Box<Error + Send + Sync>;
+#[derive(Debug)]
+pub enum SnmpError {
+    ASN1Error(asn1::Error),
+    WrongType,
+    Generic(String)
+}
+
+impl fmt::Display for SnmpError {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        match *self {
+            SnmpError::ASN1Error(ref e) => write!(f, "{}", e),
+            SnmpError::WrongType => write!(f, "wrong type"),
+            SnmpError::Generic(ref e) => write!(f, "{}", e)
+        }
+    }
+}
+
+impl error::Error for SnmpError {
+    fn description(&self) -> &str {
+        match *self {
+            SnmpError::ASN1Error(ref e) => e.description(),
+            SnmpError::WrongType => "wrong type",
+            SnmpError::Generic(ref s) => s
+        }
+    }
+
+    fn cause(&self) -> Option<&error::Error> {
+        match *self {
+            SnmpError::ASN1Error(ref e) => e.cause(),
+            _ => None
+        }
+    }
+}
+
+impl<'a> From<&'a str> for SnmpError {
+    fn from(e: &'a str) -> SnmpError {
+        SnmpError::Generic(e.to_owned())
+    }
+}
+
+impl From<asn1::Error> for SnmpError {
+    fn from(e: asn1::Error) -> SnmpError {
+        SnmpError::ASN1Error(e)
+    }
+}
 
 #[derive(Debug, Clone, Copy)]
 enum SnmpVersion {
@@ -19,12 +65,12 @@ pub enum SnmpPacket {
 
 #[derive(Debug, Clone)]
 pub struct SnmpV1Packet {
-    community: String,
-    value: SnmpV1PDU
+    pub community: String,
+    pub pdu: SnmpV1PDU
 }
 
 impl SnmpPacket {
-    fn new(b: &[u8]) -> Result<SnmpPacket, SnmpError> {
+    pub fn new(b: &[u8]) -> Result<SnmpPacket, SnmpError> {
         let mut c = io::Cursor::new(b);
 
         let decoded = try!(asn1::decode_value(&mut c));
@@ -36,13 +82,13 @@ impl SnmpPacket {
         match version {
             0 => Ok(SnmpPacket::V1( SnmpV1Packet{
                 community: community,
-                value: try!(SnmpV1PDU::new(sequence[2].clone()))})),
+                pdu: try!(SnmpV1PDU::new(sequence[2].clone()))})),
             _ => Err(From::from("blah"))
         }
     }
 
 
-    fn as_v1(self) -> Result<SnmpV1Packet, SnmpError> {
+    pub fn as_v1(self) -> Result<SnmpV1Packet, SnmpError> {
         match self {
             SnmpPacket::V1(p) => Ok(p),
             // _ => Err(From::from("invalid type"))
@@ -110,6 +156,16 @@ pub struct Trap {
     variables: Box<[asn1::ASN1Value]>
 }
 
+#[derive(Debug, PartialEq, Clone)]
+pub enum ErrorStatus {
+    NoError = 0,
+    TooBig = 1,
+    NoSuchName = 2,
+    BadValue = 3,
+    ReadOnly = 4,
+    GenErr = 5
+}
+
 fn decode_trap(v: &[asn1::ASN1Value]) -> Result<Trap, SnmpError> {
     if v.len() < 6 {
         return Err(From::from("invalid length"))
@@ -145,10 +201,8 @@ mod tests {
         let v1pkt = v.as_v1().unwrap();
         assert_eq!(v1pkt.community, "public");
 
-        let trap = v1pkt.value.as_trap().unwrap();
-        println!("trap = {:?}", trap);
+        let trap = v1pkt.pdu.as_trap().unwrap();
         assert!(oid_equals(&[1,3,6,1,6, 3], &trap.enterprise_oid));
-
         assert_eq!(trap.agent_address, IpAddr::V4(Ipv4Addr::new(23,3,3,4)));
         assert_eq!(trap.generic, GenericTrap::LinkDown);
     }

@@ -7,3 +7,5 @@ authors = ["Ian Quick <ian.quick@gmail.com>"]
 libc = "0.2"
 byteorder = "0.4"
 bit-vec = "0.4"
+crossbeam = "0.2"
+toml = "0.1"

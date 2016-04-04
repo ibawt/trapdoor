@@ -255,7 +255,10 @@ pub fn decode_value(c: &mut ASN1Reader) -> ASN1Result<ASN1Value> {
     use self::ASN1Type::*;
 
     let (asn_type, length) = try!(read_tag_value(c));
-    println!("{:?} length: {}", asn_type, length);
+    // println!("{:?} length: {}", asn_type, length);
+    if length > c.get_ref().len() {
+        return Err(Error::UnexpectedValue)
+    }
 
     match asn_type {
         Sequence => {
